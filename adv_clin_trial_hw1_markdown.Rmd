@@ -1,0 +1,333 @@
+---
+title: "Advanced Clinical Trials HW1"
+author: "Adam Funk"
+date: '2023-09-18'
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Question 1
+
+The DLT curves are provided below. There does not appear to be any clear pattern in which they fallow other than the monotonically increasing nature built in by design.
+
+
+```{r Q1}
+#Assignment 1 for Advanced Clinical Trials;
+library(ggplot2)
+#Question 1: Generate 100 dose-toxicity curves using the CLertant and O'Quigley Method
+
+#Set number of doses, number of simulations, and the MTD
+random_dosetox_curves <- function(ndose = 4, nsim = 100, mtd = 0.2){
+  #Assign number of doses
+  doses <- ndose
+
+  #Generate Dataframe doses X simulations to export later
+  sims <- data.frame(matrix(nrow = nsim, ncol = doses + 1))
+  mtdfin <- vector("numeric")
+
+  #Create a function that exports one set of possible DLT values
+  sim1 <- function(J = doses){
+    #Identify the mtd for this case
+    mtddose <- floor(runif(1, 1, (doses + 1)))
+    #Sample from a random Beta
+    m <- rbeta(1, max(J - mtddose, 0.5), 1)
+    #Assign the upper bound for DLT probabilities
+    b <- mtd + (1 - mtd) * m
+    #Generate the random uniform DLTs of doses under that upper bound
+    probs <- sort(runif(J, 0, b))
+    #Idetify the randomly generated MTD
+    found_mtd <- which.min(abs(probs - mtd))
+      #suppressWarnings(max(max(which((probs - mtd) < 0)), 0))
+    #Assign, Name, and Export the DLTs, Identified MTD, and true MTD dose
+    sim1_res <- list(probs, found_mtd, mtddose)
+    names(sim1_res) <- c("probs", "found_mtd", "mtddose")
+    return(sim1_res)
+  }
+
+  #Set Starting value
+  i <- 1
+  
+    while(i < nsim + 1){
+      res <- sim1()
+      #Create statement that if the found mtd is equal to the real mtd,
+      #Assign those DLT values to the dataset; else return old dataset
+      if(res$found_mtd == res$mtddose){
+        sims[i,] <- c(res$probs, res$mtddose)
+      } 
+      #Increase value of i only if the DLT values were assigned
+      i <- ifelse(res$found_mtd == res$mtddose, i + 1, i)
+    }
+  #Return the dataset of all DLT probabilities that matched the criteria
+  return(sims)
+}
+
+
+#Set seed to use throughout
+set.seed(545)
+curves <- random_dosetox_curves()
+
+#Plot the DLT results found from the above function;
+matplot(t(curves[, 1:4]), type = "l", xlab = "Dose", ylab = "DLT") 
+
+```
+
+## Question 2
+
+From the design, we properly select the MTD roughly 70% of the time in the initial simulated study. This is a very good PCS. The boxplot shows that although most curves perform well, they are not as well performing as the first model, with an average of 57.3%, and a median and range of 55.9% (1.5%, 100.0%).
+
+```{r Q2}
+#Question 2: Nonparametric Benchmark
+non_bench <- function(theta = 0.3, npat = 24, nsim = 5000, dltcuts = c(0.05, 0.15, 0.3, 0.5)){
+  dltval <- vector("numeric")
+  for(j in 1:nsim){
+    #Set random uniform for a set of patients
+    randlts <- runif(npat)
+    #Set empty vectors
+    simdlt <- vector("numeric")
+    #Identify the minimum for each simulation
+    for(i in 1:length(dltcuts)){
+      simdlt[i] <- sum(randlts < dltcuts[i]) / npat
+    }
+    #Identify MTD
+    dltval[j] <- which.min(abs(simdlt - theta))
+  }
+  #Return the MTD value
+  return(dltval)
+}
+
+#Set Value to a table
+table2 <- non_bench()
+
+#Get number of times each dose is selected as mtd
+doseselect <- c(sum(table2 == 1), sum(table2 == 2), sum(table2 == 3), sum(table2 == 4))/ (5000)
+doseselect
+
+#Get Accuracy Index
+1 - 4 * (abs(0.05 - 0.3) * doseselect[1] + abs(0.15 - 0.3) * doseselect[2] + abs(0.3 - 0.3) * doseselect[3] + abs(0.5 - 0.3) * doseselect[4]) /
+      (abs(0.05 - 0.3) + abs(0.15 - 0.3) + abs(0.3 - 0.3) + abs(0.5 - 0.3)) 
+
+
+#Set an empty matrix 
+vals <- matrix(nrow = 100, ncol = 5)
+#Set i
+i <- 1
+#Replace the empty matrix with PCS values for each curve
+for(i in 1:100){
+  
+  table2.2 <- non_bench(theta = 0.2, npat = 24, nsim = 1000, dltcuts = as.vector(curves[i, 1:4]))
+  doseselect <- c(sum(table2.2 == 1), sum(table2.2 == 2), sum(table2.2 == 3), sum(table2.2 == 4)) / (1000)
+  vals[i, ] <- c(doseselect, curves[i, 5])
+  
+}
+
+
+#Isolate the true MTD values found
+mtdvals <- vals[,5]
+#Match those MTD values to the appropriate column
+matchvals <- matrix(nrow = 100, ncol = 2)
+for(i in 1:100){
+  matchvals[i, 1] <- vals[i, mtdvals[i]]
+  matchvals[i, 2] <- mtdvals[i]
+}
+
+#Plot the boxplot of the PCS values
+boxplot(matchvals[, 1])
+#Summary statistics of PCS values
+mean(matchvals[, 1])
+quantile(matchvals[, 1])
+
+```
+
+## Question 3
+
+Below is the posterior curve with the red shaded region the current and the blue the target dlt rates. From these shaded areas, we would recommend to deescalate the dosage. However, this is not possible, but the dosage is not yet eliminated by the stopping rules. Thus we do not yet stop the trial despite there being no dose to deescalate to. 
+
+```{r Q3}
+
+#Question 3: Keyboard design
+#Set Beta (1,1)
+a <- 1
+b <- 1
+#Target DLT
+theta <- 0.2
+#Epsilons of intervals
+ep <- 0.05
+#Number of DLTs
+succ <- 2
+#Number of non-DLTs
+fail <- 3
+#Get the length of each key
+keyleng <- 2 * ep
+
+keyboard <- function(a =1, b = 1, theta = 0.2, ep = 0.05, succ = 2, fail = 3){
+#Generate proper sequence of 
+intervals <- seq(from = ((theta - ep) %% keyleng),  to = 1, by = keyleng)
+#Set empty vector to populate values, their names, and denote the true interval
+val <- matrix(nrow = 1, ncol = length(intervals) - 1)
+valnames <- matrix(nrow = 1, ncol = length(intervals) - 1)
+trueint <- matrix(nrow = 1, ncol = length(intervals) - 1)
+
+#Generate the probabilities from the beta distribution given our data
+for(i in 1:(length(intervals) - 1)){
+  val[i] <- pbeta(intervals[i + 1], a + succ, b + fail) - pbeta(intervals[i], a + succ, b + fail)
+  valnames[i] <- c(paste0(intervals[i], ", ", intervals[i + 1]))
+  trueint[i] <- (intervals[i] < theta & intervals[i + 1] > theta)
+}
+
+#Identify the target interval
+targetint <- as.numeric(which(trueint == T))
+colors <- c("Current" = "red", "Target" = "red")
+
+#Plot the distribution
+keyplot <- qplot(seq(0, 1, 0.01), geom = "blank") + 
+  stat_function(aes(1), fun = dbeta, colour = "black", n = 101, 
+                args = list(a + succ, b + fail)) +
+  geom_segment(aes(x = intervals, y = 0, xend = intervals, yend = dbeta(intervals, a + succ, b + fail))) + 
+  #Highlight the highest probability area in red
+  annotate('rect', xmin = intervals[which.max(val)], xmax = intervals[which.max(val) + 1],
+                   ymin = 0, ymax = dbeta(seq(intervals[which.max(val)], intervals[which.max(val)], 0.01), a + succ, b + fail),
+                   color = "red", alpha = 0.2, fill = "red") +
+  #Highligh the target probability area in blue
+  annotate('rect', xmin = intervals[targetint], xmax = intervals[targetint + 1],
+           ymin = 0, ymax = dbeta(seq(intervals[targetint], intervals[targetint], 0.01), a + succ, b + fail),
+           color = "blue", alpha = 0.2, fill = "blue") + 
+  labs(x = "Intervals",
+       y = "Probability Distribution",
+       color = "Legend")
+  scale_color_manual(values = colors)
+
+return(keyplot)
+
+}
+
+#Give results desired in assignment
+keyboard()
+
+```
+
+## Question 4
+
+
+
+
+```{r Q4}
+
+#Question 4: Compare 3 + 3, BOIN, and Keyboard
+library(UBCRM)
+library(BOIN)
+set.seed(545)
+latent_tox <- runif(24)
+round(latent_tox, 3)
+dlts <- c(0.05, 0.13, 0.25, 0.38)
+
+#3 plus 3 design
+set.seed(545)
+s3p3 <- sim3p3(dlts, seed = 545)
+
+#BOIN design
+set.seed(545)
+boinres <- get.oc(target = 0.25, p.true = dlts, ncohort = 8, cohortsize = 3, ntrial = 1, see = 545)
+get.boundary(target = 0.25, ncohort = 8, cohortsize = 3)
+
+#Keyboard
+#Cohort 1 & 2 & 6
+keyboard(a = 1, b = 1, theta = 0.25, ep = 0.05, succ = 0, fail = 3)
+#Cohort 3
+keyboard(a = 1, b = 1, theta = 0.25, ep = 0.05, succ = 1, fail = 2)
+#Cohort 4 & 5 & 7
+keyboard(a = 1, b = 1, theta = 0.25, ep = 0.05, succ = 1, fail = 5)
+#Final Allocation
+keyboard(a = 1, b = 1, theta = 0.25, ep = 0.05, succ = 2, fail = 7)
+
+```
+
+
+## Question 5
+
+The i3 + 3 design gives a PCS of approximately 54%, which is lower than the benchmark value of 70%, indicating as expected it performs worse. This trend carries over to the generate curves where we have a PCS mean of 46.1% with a median and range of 41.9% (0.4%, 1.00%). The boxplots look similar, just shifted down a little as a result of the worse performance of this method.
+
+```{r Q5}
+#Question 5: i3 + 3 design
+
+#Create i3 + 3 function
+i33 <- function(mtd = 0.3, ep = 0.05, n = 3, ncohort = 8, dltprobs = c(0.05, 0.15, 0.3, 0.5)){
+  #Set upper and lower bounds of the interval
+  lbmtd <- mtd - ep
+  upmtd <- mtd + ep
+  #Set initial dose level
+  dose <- 1
+  #Create empty vectors to fill in
+  dltall <- vector("numeric")
+  dosevec <- vector("numeric")
+  for(i in 1:ncohort){
+    #Generate number of random values
+    x <- runif(n)
+    #Decide if those random values are greater than the DLT cutoff
+    dlt <- (x < dltprobs[dose])
+    #Get a vector of the dose level
+    dosevals <- rep(dose, n)
+    #Add new values to vectors
+    dltall <- c(dltall, dlt)
+    dosevec <- c(dosevec, dosevals)
+    #Set value of dlt over mtd
+    dltmtdrat <- sum(dltall[dosevec == dose])/length(dltall[dosevec == dose])
+    #Set value of dlt - 1 over mtd
+    dltmtdratm1 <- (sum(dltall[dosevec == dose]) - 1)/length(dltall[dosevec == dose])
+  #Create conditional statement as to what the next dose level should be
+  if(dltmtdrat < lbmtd){
+      dose <- min(dose + 1, length(dltprobs))
+    } else if (lbmtd <= dltmtdrat & dltmtdrat <= upmtd){
+      dose <- dose
+    } else if (upmtd < dltmtdrat & dltmtdratm1 < lbmtd){
+      dose <- dose
+    } else {dose <- max(dose - 1, 1)}
+  
+  }
+  #Return dataframe as output
+  return(as.data.frame(cbind(dltall, dosevec, dose)))
+}
+
+set.seed(545)
+#Get final dosages
+table5 <- replicate(5000, i33()$dose)
+#Identify how often we are choosing those doses
+doseselect <- c(sum(table5 == 1), sum(table5 == 2), sum(table5 == 3), sum(table5 == 4))/ (24 * 5000)
+doseselect
+
+
+#Set an empty matrix 
+vals <- matrix(nrow = 100, ncol = 5)
+
+#Set i
+i <- 1
+#Use the curves to get PCS estimates;
+for(i in 1:100){
+  table5.2 <- replicate(1000, i33(mtd = 0.2, n = 3, ncohort = 8, dltprobs = as.vector(curves[i, 1:4]))$dose)
+  doseselect <- c(sum(table5.2 == 1), sum(table5.2 == 2), sum(table5.2 == 3), sum(table5.2 == 4))/ (24 * 1000)
+  vals[i, 1:5] <- c(doseselect, curves[i, 5])
+}
+
+vals
+#Isolate the true MTD values found
+mtdvals <- vals[,5]
+#Match those MTD values to the appropriate column
+matchvals <- matrix(nrow = 100, ncol = 2)
+for(i in 1:100){
+  matchvals[i, 1] <- vals[i, mtdvals[i]]
+  matchvals[i, 2] <- mtdvals[i]
+}
+
+#Plot the boxplot of the PCS values
+boxplot(matchvals[, 1], subset = matchvals[, 2])
+#Summary statistics of PCS values
+mean(matchvals[, 1])
+quantile(matchvals[, 1])
+
+
+
+```
